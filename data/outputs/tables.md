@@ -18,7 +18,7 @@ NeuMF re-ranking also improves over raw FAISS retrieval across all metrics.
 | 16 | 0.0092 | 0.4821 |
 | 32 | 0.0060 | 0.4340 |
 | 64 | 0.0083 | 0.3938 |
-| 128 ** | 0.0099 ** | 0.3631 |
+| **128** | **0.0099** | 0.3631 |
 | 256 | 0.0090 | 0.3134 |
 
 **Best:** embed_dim=128 achieves highest NDCG@10 (0.0099).
