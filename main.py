@@ -9,30 +9,43 @@ Endpoints:
   GET  /health     — liveness check
 """
 
-from fastapi.staticfiles import StaticFiles
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import io
+import os
+from pathlib import Path
+
 import numpy as np
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
+from pydantic import BaseModel
 
 from scripts.build_features import embed_image
 from scripts.model import recommend
+
+# Restrict CORS to known origins. Override via ALLOWED_ORIGINS env var
+# (comma-separated list). Defaults to Vercel deployment + local dev.
+_default_origins = [
+    "https://cine-style.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:8000",
+]
+_env_origins = os.environ.get("ALLOWED_ORIGINS", "")
+allowed_origins: list[str] = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()] or _default_origins
+)
 
 app = FastAPI(title="CineStyle", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://cinestyle.vercel.app"],
+    allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount(
-    "/static",
-    StaticFiles(directory="data/raw/crops", check_directory=False),
-    name="crops",
-)
+
+Path("data/raw/crops").mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory="data/raw/crops"), name="crops")
 
 class GarmentResponse(BaseModel):
     garment_type: str
