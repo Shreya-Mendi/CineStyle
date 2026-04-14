@@ -16,15 +16,18 @@ User captures a frame from a show
   Character + garment region selected
               ↓
   Computer vision pipeline
-  → Garment type / color / style attributes extracted
+  → Garment type / color / style attributes extracted (FashionCLIP)
               ↓
-  Recommendation engine
-  → Similar items ranked by visual + style similarity
+  Four-stage recommendation engine
+  → FAISS KNN (visual similarity)
+  → NeuMF re-ranking (collaborative filtering)
+  → SASRec re-ranking (sequential Transformer)
+  → Diversity filter (price spread + deduplication)
               ↓
-  Product cards with links to purchase
+  Product cards with purchase links
 ```
 
-The key contribution is the **end-to-end pipeline from passive viewing to active discovery** — combining vision-based garment parsing with a hybrid recommendation system that uses both visual embeddings and structured style attributes.
+The key contribution is the **end-to-end pipeline from passive viewing to active discovery** — combining vision-based garment parsing with a hybrid recommendation system that uses visual embeddings, collaborative filtering, and sequential Transformer-based personalization.
 
 ---
 
@@ -40,15 +43,15 @@ Viewers regularly notice clothing in shows and films but have no frictionless wa
 |---|---|---|
 | Naive baseline | Popularity-based recommender (most-interacted items globally) | Baseline |
 | Classical ML | FAISS KNN with FashionCLIP visual embeddings + cosine similarity | Candidate retrieval |
-| Deep learning (feedforward) | NeuMF re-ranker (GMF + MLP with BPR loss) | Re-ranking |
-| Deep learning (Transformer) | SASRec (Self-Attentive Sequential Recommendation) | Sequential re-ranking |
+| Deep learning (feedforward) | NeuMF re-ranker — GMF + MLP branches with BPR loss | Personalized re-ranking |
+| Deep learning (Transformer) | SASRec — causal self-attention over user sequences with BCE loss | Sequential re-ranking |
 
-All four are implemented, documented, and benchmarked in `scripts/evaluate.py`. The deployed app uses the full four-stage pipeline (FAISS → NeuMF → SASRec → diversity filter).
+All four are implemented, documented, and benchmarked. The deployed app uses the full four-stage pipeline (FAISS → NeuMF → SASRec → diversity filter).
 
 ### Evaluation Strategy
 
 **Offline:**
-- Precision@K, Recall@K, NDCG@K (K = 5, 10)
+- Precision@K, Recall@K, NDCG@K (K = 5, 10) — FAISS KNN vs SASRec comparison
 - Mean Average Precision (MAP@K)
 - Visual similarity score (cosine distance in embedding space)
 
@@ -57,19 +60,23 @@ All four are implemented, documented, and benchmarked in `scripts/evaluate.py`. 
 - "Save to wishlist" rate
 - Time-to-first-click
 
-### Experiment
+### Experiments
 
 **Experiment 1: Frame quality vs. recommendation accuracy**
 
-We vary the input frame quality (full HD, compressed, blurred) and measure how retrieval precision degrades. Motivation: real users will capture frames via screenshot on various devices. This tests robustness of the vision pipeline to real-world degradation.
+We vary input frame quality (full HD, JPEG-compressed at quality=15, Gaussian-blurred radius=4) and measure how retrieval precision degrades. Tests robustness of the vision pipeline to real-world screenshot quality variation.
 
 **Experiment 2: NCF hyperparameter tuning (embed_dim)**
 
-We sweep `embed_dim` across [16, 32, 64, 128, 256] for the NeuMF re-ranker, training each variant for 10 epochs and evaluating NDCG@10. Results saved to `data/outputs/hyperparam_tuning.json`.
+We sweep `embed_dim` across [16, 32, 64, 128, 256] for the NeuMF re-ranker, training each variant for 10 epochs and evaluating NDCG@10. Results in `data/outputs/hyperparam_tuning.json`.
+
+**Experiment 3: Persona comparison — FAISS vs NeuMF vs SASRec**
+
+Six named user personas (see [Personas](#personas)) with distinct style profiles are used to show how each stage of the pipeline produces measurably different rankings. The same probe image yields different top-3 categories at the FAISS, NCF, and SASRec stages — demonstrating that deeper personalization shifts results toward each persona's taste.
 
 **Error Analysis: Category mispredictions**
 
-We identify 5 representative cases where FAISS retrieval returns a top-5 item from a different garment category than the query (e.g., querying a dress but retrieving shoes). Results with probe/recommendation image pairs saved to `data/outputs/error_analysis.json`.
+Five representative cases where FAISS retrieval returns a top-5 item from a different garment category than the query are identified and visualized. Results in `data/outputs/error_analysis.json`.
 
 ---
 
@@ -80,57 +87,90 @@ We identify 5 representative cases where FAISS retrieval returns a top-5 item fr
 ```
 Input: video frame (image)
   ↓
-Person detection: YOLOv8 or GroundingDINO
+Garment region crop (user-drawn bounding box)
   ↓
-Garment region crop
-  ↓
-Attribute extraction: FashionCLIP or fine-tuned CLIP
-  → garment type, color, texture, aesthetic label
-  ↓
-Embedding vector (512-dim)
+FashionCLIP (patrickjohncyh/fashion-clip)
+  → garment type, color, aesthetic label
+  → 512-dim embedding vector
 ```
 
-**Models considered:**
-- `patrickjohncyh/fashion-clip` — CLIP fine-tuned on fashion data (Farfetch dataset, 700K items)
-- `SCHP` (Self-Correction for Human Parsing) — semantic segmentation for garment region isolation
-- YOLOv8-pose — person bounding box + keypoint-guided crop
+**Model:** `patrickjohncyh/fashion-clip` — CLIP fine-tuned on the Farfetch dataset (700K fashion items). Classification is done via cosine similarity against text label embeddings — no separate classification head needed.
 
 ### Recommendation Engine
 
-Three-stage pipeline:
+Four-stage pipeline:
 
-**Stage 1 — Candidate Retrieval**
-- KNN search over FAISS index of product embeddings
+**Stage 1 — Candidate Retrieval (Classical ML)**
+- FAISS `IndexFlatIP` over L2-normalized FashionCLIP product embeddings
+- Inner product on normalized vectors = cosine similarity
 - Returns top-50 visually similar items
-- Baseline: popularity rank within detected aesthetic category
+- Baseline: global popularity ranking (naive model)
 
-**Stage 2 — Re-ranking (Deep Learning)**
-- NCF-style model trained on implicit feedback (clicks, saves, purchases)
-- Input: user context (session history) + item visual embedding + item metadata
-- Loss: BPR (Bayesian Personalized Ranking)
+**Stage 2 — NCF Re-ranking (Deep Learning, Feedforward)**
+- **NeuMF** (He et al. 2017): GMF branch (elementwise product of user/item embeddings) + MLP branch (concatenate → [256→128→64] → ReLU)
+- Trained with **BPR loss** (Bayesian Personalized Ranking) on implicit feedback
+- Input: `(user_id, item_embedding_512d)` → scalar relevance score
+
+**Stage 2b — SASRec Re-ranking (Deep Learning, Transformer)**
+- **SASRec** (Kang & McAuley, ICDM 2018): Self-Attentive Sequential Recommendation
+- Architecture: FashionCLIP embeddings (512d) → linear projection → d_model=128, learned positional embeddings, N=2 causal Transformer blocks (multi-head self-attention + GELU FFN + pre-LayerNorm), final dot product with target item projection
+- Trained with **BCE loss** on (sequence → next item) prediction
+- Activated when `user_history` (sequence of prior interaction embeddings) is provided
 
 **Stage 3 — Diversity Filter**
-- Deduplicate by color/silhouette cluster
-- Ensure price range spread
+- Deduplicates by price quartile — at most 3 items per low/mid/high price bucket
+- Ensures spread across price tiers in the final recommendation grid
 
-### Data Sources
+### Dataset
 
 | Source | Purpose |
 |---|---|
-| Polyvore dataset | Outfit compatibility training |
-| DeepFashion2 | Garment detection + attribute labels |
-| Farfetch (via FashionCLIP) | Product embeddings |
-| iMaterialist (FGVC) | Fine-grained garment segmentation |
-| TMDB stills API | Frame sourcing for demo content |
-| Amazon Product API / Nordstrom API | Live product cards |
+| [detection-datasets/fashionpedia](https://huggingface.co/datasets/detection-datasets/fashionpedia) | Product catalog — bounding-box crops of 46 garment/accessory categories |
+| Synthetic interactions | NCF + SASRec training — taste-cohesive implicit feedback (500 users, 30 interactions each) |
+| Persona-biased interactions *(optional)* | Stronger training signal for named persona demo |
+| Duke LiteLLM API (Claude) | Agentic price enrichment via tool-calling loop |
 
-### Handling Recommendation Challenges
+The catalog is built from Fashionpedia's editorial images: each annotated bounding box becomes one product record with a cropped JPEG, category label, and LLM-enriched price.
 
-**Sparsity:** New users have no history → cold-start handled by content-based fallback (visual similarity only, no collaborative signal)
+### API Endpoints
 
-**Popularity bias:** Genre-based popularity baseline is our naive model; the neural re-ranker penalizes over-recommended items using a long-tail boost term
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/identify` | Upload a garment image crop → returns type, color, aesthetic, 512-dim embedding |
+| `POST` | `/recommend` | Send embedding + optional filters → returns ranked product cards |
+| `GET` | `/personas` | List all demo personas (empty list if `data/personas.json` absent) |
 
-**Position effects:** Recommendations are randomized in A/B within price tier to avoid position bias in evaluation
+**`/recommend` request fields:**
+
+```json
+{
+  "embedding": [/* 512 floats */],
+  "top_k": 12,
+  "price_min": null,
+  "price_max": null,
+  "persona_id": null
+}
+```
+
+`persona_id` is optional. When set, the persona's price range and user ID are applied to NCF/SASRec re-ranking — making recommendations visibly persona-specific. Omitting it gives purely embedding-based results (no change to the deployed behaviour).
+
+---
+
+## Personas
+
+Six named demo personas with distinct style profiles, used to demonstrate how the three model stages produce different rankings:
+
+| # | Name | Aesthetic | Favourite categories | Price range |
+|---|------|-----------|----------------------|-------------|
+| 0 | Aria Chen 🖤 | Minimalist streetwear | jacket, pants, shoe, tee | $40–300 |
+| 1 | Sofia Rossi 🤍 | Old money / quiet luxury | coat, bag, sweater, shoe | $150–850 |
+| 2 | Juno Park 💜 | Y2K / dark academia | top, skirt, dress, shoe | $20–180 |
+| 3 | Paloma Vega 🌸 | Cottagecore | dress, blouse, bag, shoe | $30–250 |
+| 4 | Marcus Webb 🕴️ | Sharp formal | pants, blazer, watch, shoe | $80–700 |
+| 5 | Zara Okonkwo ✨ | Maximalist accessories | bag, scarf, hat, shoe | $25–500 |
+
+Personas are defined in `data/personas.json` and served by `GET /personas`. The notebook Step 9 runs a side-by-side comparison showing how each persona's probe image produces different top-3 categories at the FAISS, NCF, and SASRec stages.
 
 ---
 
@@ -138,65 +178,65 @@ Three-stage pipeline:
 
 ```
 cinestyle/
-├── README.md
+├── readme.md
 ├── requirements.txt
-├── setup.py
-├── main.py                          # FastAPI backend entry point
+├── main.py                          # FastAPI backend — /identify, /recommend, /personas
+├── Dockerfile
 ├── scripts/
-│   ├── make_dataset.py              # Download + preprocess DeepFashion2, Polyvore
-│   ├── build_features.py            # Extract CLIP embeddings, build FAISS index
-│   ├── model.py                     # Train NCF + SASRec re-rankers
-│   └── evaluate.py                  # Offline eval, hyperparameter tuning, error analysis
+│   ├── make_dataset.py              # Fashionpedia download → catalog.jsonl + interactions.jsonl
+│   │                                #   --personas flag: use persona-biased interaction data
+│   ├── build_features.py            # FashionCLIP embeddings → FAISS index
+│   ├── model.py                     # NeuMF + SASRec training + four-stage recommend()
+│   ├── evaluate.py                  # Offline eval, hyperparameter tuning, error analysis
+│   ├── fetch_prices.py              # Agentic price enrichment via Duke LiteLLM
+│   ├── generate_charts.py           # Output chart generation
+│   └── download_assets.py           # Asset download helpers
 ├── models/
-│   ├── faiss_index/                 # Product embedding index
-│   ├── ncf_reranker/                # Trained NCF weights
-│   └── sasrec/                      # Trained SASRec weights
+│   ├── faiss_index/                 # products.index + meta.json
+│   ├── ncf_reranker/                # ncf.pt + config.pt
+│   └── sasrec/                      # sasrec.pt + config.pt
 ├── data/
-│   ├── raw/                         # Raw dataset downloads
-│   ├── processed/                   # Embeddings, interaction logs
-│   └── outputs/                     # Eval results, experiment logs
+│   ├── personas.json                # Named persona definitions (6 personas)
+│   ├── raw/crops/                   # Fashionpedia garment crops
+│   ├── processed/                   # catalog.jsonl, interactions.jsonl
+│   └── outputs/                     # Eval results, experiment charts
 ├── notebooks/
-│   └── cinestyle_pipeline.ipynb     # End-to-end pipeline notebook
-├── frontend/                        # Next.js UI
+│   └── cinestyle_pipeline.ipynb     # End-to-end Colab A100 notebook (Steps 0–9)
+├── frontend/
 │   ├── app/
 │   │   ├── page.tsx                 # Main viewer interface
-│   │   ├── components/
-│   │   │   ├── FrameCapture.tsx     # Image upload + frame selection
-│   │   │   ├── GarmentHighlight.tsx # Click-to-select overlay
-│   │   │   ├── ResultPanel.tsx      # Slide-in identification + recommendations
-│   │   │   └── ProductCard.tsx      # Product recommendation card
-│   └── ...
+│   │   ├── globals.css              # Cinema dark theme, amber accents
+│   │   └── components/
+│   │       ├── FrameCapture.tsx     # Image/video upload + frame selection slider
+│   │       ├── GarmentHighlight.tsx # Drag-to-select garment overlay
+│   │       ├── ResultPanel.tsx      # Slide-in identification + recommendation panel
+│   │       └── ProductCard.tsx      # Shoppable product card
+│   └── lib/api.ts                   # Typed API client
 └── .gitignore
 ```
 
 ---
 
-## Application Design (UX)
+## Notebook (Colab A100)
 
-The app is not a Streamlit demo. It is a full editorial-style web experience.
+`notebooks/cinestyle_pipeline.ipynb` runs the complete pipeline end-to-end. Steps:
 
-**Flow:**
-1. User pastes a show/episode link OR uploads a still image
-2. Frame is rendered with a "tap to identify" overlay
-3. User clicks on any garment region
-4. A panel slides in with:
-   - Identified item (type, color, aesthetic label, similar celebrity looks)
-   - 6–12 shoppable recommendations in a scroll rail (price range, brand, link)
-   - "See more like this" → deeper search
-5. User can save items to a wishlist, share a look, or filter by price
-
-**Design language:** Dark cinema aesthetic, warm amber accents, editorial typography — feels like a luxury fashion app, not a class project.
-
-**Tech stack:**
-
-| Layer | Tool |
-|---|---|
-| Frontend | Next.js + Tailwind CSS |
-| Backend | FastAPI + uvicorn |
-| Vision inference | Hugging Face Transformers (FashionCLIP) |
-| Vector search | FAISS |
-| Deployment | Modal or Railway (backend) + Vercel (frontend) |
-| Compute | GPU inference via Modal serverless |
+| Step | What it does | Time (A100) |
+|------|--------------|-------------|
+| 0 | Install dependencies | ~3 min |
+| 1 | Clone repo & configure paths | <1 min |
+| 2 | Download Fashionpedia + build catalog (20k items) | ~15 min |
+| 2b *(opt)* | Build persona-biased interactions | ~2 min |
+| 3 | Enrich prices with Duke LiteLLM agent | ~5 min |
+| 4 | FashionCLIP embeddings + FAISS index | ~15 min |
+| 5 | Train NeuMF (10 epochs, BPR) | ~5 min |
+| 5b | Train SASRec (20 epochs, BCE) | ~8 min |
+| 6 | Offline eval — FAISS vs SASRec Precision/Recall/NDCG/MAP | ~3 min |
+| 6b | NCF hyperparameter sweep (embed_dim) | ~10 min |
+| 6c | Error analysis — 5 category mispredictions | ~2 min |
+| 7 | Frame quality degradation experiment | ~3 min |
+| 8 | Quick inference demo | ~1 min |
+| 9 *(opt)* | Persona comparison — visual grids per persona | ~3 min |
 
 ---
 
@@ -217,8 +257,19 @@ npm run dev   # http://localhost:3000
 
 **Build product index:**
 ```bash
-python scripts/make_dataset.py
-python scripts/build_features.py   # builds FAISS index
+# Standard (anonymous synthetic users)
+python scripts/make_dataset.py --max_items 20000
+
+# With persona-biased interactions (recommended for persona demo)
+python scripts/make_dataset.py --max_items 20000 --personas
+
+python scripts/build_features.py
+```
+
+**Enrich prices (requires Duke LiteLLM API key):**
+```bash
+export DUKE_LLM_API_KEY="<your key>"
+python scripts/fetch_prices.py
 ```
 
 **Train re-rankers:**
@@ -227,13 +278,41 @@ python scripts/model.py --train --epochs 10 --batch_size 256
 python scripts/model.py --train_sasrec --epochs 20 --batch_size 256
 ```
 
-**Evaluate (four-model comparison):**
+**Evaluate:**
 ```bash
 python scripts/evaluate.py --k 5 --k 10
 python scripts/evaluate.py --tune              # NCF hyperparameter sweep
 python scripts/evaluate.py --error_analysis    # category misprediction analysis
 python scripts/evaluate.py --experiment        # frame quality degradation
 ```
+
+---
+
+## Application Design (UX)
+
+**Flow:**
+1. User uploads a show still or pastes a frame
+2. Garment region is selected by dragging a bounding box over any item
+3. A panel slides in with:
+   - Identified item (garment type, color, aesthetic label)
+   - 6–12 shoppable recommendations in a scroll rail
+   - Optional persona selector — switches the NCF/SASRec persona to show how recommendations change
+4. User can save items to a wishlist or filter by price
+
+**Design language:** Dark cinema aesthetic (`#0c0a09`), warm amber accents (`#d97706`), editorial typography — slideInRight + fadeUp + pulse-amber animations.
+
+**Tech stack:**
+
+| Layer | Tool |
+|---|---|
+| Frontend | Next.js + Tailwind CSS |
+| Backend | FastAPI + uvicorn |
+| Vision | FashionCLIP (`patrickjohncyh/fashion-clip`) via HuggingFace Transformers |
+| Vector search | FAISS GPU (`IndexFlatIP`) |
+| Re-rankers | NeuMF (BPR) + SASRec (BCE) — PyTorch |
+| Price enrichment | Duke LiteLLM (OpenAI-compatible) — agentic tool-calling loop |
+| Deployment | Railway (backend) + Vercel (frontend) |
+| Training | Google Colab A100 |
 
 ---
 
@@ -248,11 +327,12 @@ python scripts/evaluate.py --experiment        # frame quality degradation
 
 ## Commercial Viability
 
-Strong. The "shop the look" market is validated (LTK, ShopLook, Amazon's "Find on Amazon" feature). CineStyle's differentiation is:
+The "shop the look" market is validated (LTK, ShopLook, Amazon's "Find on Amazon"). CineStyle's differentiation:
 
-1. **Context awareness** — recommendation is anchored to a specific scene, not a generic style board
-2. **Passive discovery** — no manual search required; the viewer's natural viewing behavior triggers the pipeline
-3. **Extensibility** — the same architecture applies to sports (what gear is that athlete wearing?) or home décor (what lamp is that?)
+1. **Context awareness** — recommendations are anchored to a specific scene, not a generic style board
+2. **Passive discovery** — no manual search; the viewer's natural behavior triggers the pipeline
+3. **Persona-driven personalization** — sequential Transformer captures evolving taste over a session
+4. **Extensibility** — the same architecture applies to sports gear, home décor, or any visual domain
 
 Monetization path: affiliate revenue on purchases, white-label API licensing to streaming platforms.
 
@@ -260,9 +340,9 @@ Monetization path: affiliate revenue on purchases, white-label API licensing to 
 
 ## Related Work
 
-- He et al. (2017) — Neural Collaborative Filtering (NCF)
+- He et al. (2017) — Neural Collaborative Filtering (NCF) / NeuMF
+- Kang & McAuley (2018) — Self-Attentive Sequential Recommendation (SASRec)
+- Chia et al. (2022) — FashionCLIP: CLIP fine-tuned on the Farfetch fashion catalog
 - Guo et al. (2019) — FashionBERT: cross-modal fashion retrieval
-- Patashnik et al. (2021) — StyleCLIP
-- Han et al. (2017) — Learning Fashion Compatibility with Bidirectional LSTMs (Polyvore)
-- FashionCLIP (Chia et al., 2022) — CLIP fine-tuned on Farfetch fashion catalog
 - Wu et al. (2022) — Graph Neural Networks in Recommender Systems: A Survey
+- Han et al. (2017) — Learning Fashion Compatibility with Bidirectional LSTMs (Polyvore)
