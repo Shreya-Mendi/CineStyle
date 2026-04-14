@@ -32,9 +32,7 @@ _default_origins = [
 ]
 _env_origins = os.environ.get("ALLOWED_ORIGINS", "")
 allowed_origins: list[str] = (
-    [o.strip() for o in _env_origins.split(",") if o.strip()]
-    if _env_origins
-    else _default_origins
+    [o.strip() for o in _env_origins.split(",") if o.strip()] or _default_origins
 )
 
 app = FastAPI(title="CineStyle", version="0.1.0")
