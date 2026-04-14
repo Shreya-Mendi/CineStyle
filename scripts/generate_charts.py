@@ -260,11 +260,13 @@ def generate_tables():
     lines.append("|-----------|---------|----------------|")
 
     best_dim = max(tune_data.keys(), key=lambda d: tune_data[d]["ndcg@10"])
-    for dim in ["16", "32", "64", "128", "256"]:
+    sorted_dims = sorted(tune_data.keys(), key=lambda d: (0, int(d)) if str(d).isdigit() else (1, str(d)))
+    for dim in sorted_dims:
         ndcg = tune_data[dim]["ndcg@10"]
         loss = tune_data[dim]["final_loss"]
-        marker = " **" if dim == best_dim else ""
-        lines.append(f"| {dim}{marker} | {ndcg:.4f}{marker} | {loss:.4f} |")
+        dim_cell = f"**{dim}**" if dim == best_dim else str(dim)
+        ndcg_cell = f"**{ndcg:.4f}**" if dim == best_dim else f"{ndcg:.4f}"
+        lines.append(f"| {dim_cell} | {ndcg_cell} | {loss:.4f} |")
 
     lines.append("")
     lines.append(f"**Best:** embed_dim={best_dim} achieves highest NDCG@10 ({tune_data[best_dim]['ndcg@10']:.4f}).")
