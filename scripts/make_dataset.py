@@ -259,17 +259,127 @@ def build_synthetic_interactions(
     print(f"Saved synthetic interactions → {interactions_path}")
 
 
+# ---------------------------------------------------------------------------
+# Optional: persona-aware interaction generation
+# ---------------------------------------------------------------------------
+
+def build_persona_interactions(
+    interactions_per_persona: int = 60,
+    anonymous_users: int = 500,
+    interactions_per_user: int = 30,
+) -> None:
+    """
+    Generate interactions.jsonl with two layers of users:
+
+      1. Named personas (IDs 0–N from data/personas.json) — each has a
+         strongly opinionated category/price bias so the three recommendation
+         stages (FAISS, NeuMF, SASRec) produce visibly different rankings.
+
+      2. Anonymous bulk users (IDs N..N+anonymous_users) — same taste-cohesive
+         sampling as build_synthetic_interactions(), used to pad training data.
+
+    Output overwrites data/processed/interactions.jsonl.
+    Running this is OPTIONAL — the default pipeline uses build_synthetic_interactions().
+    """
+    personas_path = Path("data/personas.json")
+    if not personas_path.exists():
+        print("data/personas.json not found — skipping persona interactions.")
+        return
+
+    with open(personas_path) as f:
+        personas = json.load(f)
+
+    catalog_path = PROC_DIR / "catalog.jsonl"
+    with open(catalog_path) as f:
+        catalog = [json.loads(line) for line in f]
+
+    by_cat: dict[str, list[dict]] = {}
+    for item in catalog:
+        by_cat.setdefault(item["category"], []).append(item)
+
+    all_ids = [item["id"] for item in catalog]
+    categories = list(by_cat.keys())
+
+    interactions_path = PROC_DIR / "interactions.jsonl"
+    written = 0
+
+    with open(interactions_path, "w") as f:
+
+        # ── Persona users (strongly biased) ────────────────────────────────
+        for persona in tqdm(personas, desc="persona interactions"):
+            uid = persona["id"]
+            bias: dict[str, float] = persona.get("interaction_bias", {})
+            lo, hi = persona.get("price_range", [0, 9999])
+
+            # Build a weighted item pool respecting category bias + price range
+            weighted_ids: list[str] = []
+            for cat, weight in bias.items():
+                cat_items = [
+                    item["id"] for item in by_cat.get(cat, [])
+                    if lo <= item.get("price", 0) <= hi
+                ]
+                n = max(1, int(interactions_per_persona * weight))
+                weighted_ids.extend(random.choices(cat_items, k=min(n, len(cat_items))) if cat_items else [])
+
+            # Pad with random items from non-bias categories (20%)
+            n_rand = max(0, interactions_per_persona - len(weighted_ids))
+            random_ids = random.sample(all_ids, k=min(n_rand, len(all_ids)))
+
+            seen: set[str] = set()
+            for item_id in weighted_ids + random_ids:
+                if item_id not in seen:
+                    seen.add(item_id)
+                    f.write(json.dumps({"user_id": uid, "item_id": item_id, "label": 1}) + "\n")
+                    written += 1
+
+        # ── Anonymous bulk users (taste-cohesive, same as before) ──────────
+        id_offset = max(p["id"] for p in personas) + 1
+        for i in tqdm(range(anonymous_users), desc="anonymous interactions"):
+            uid = id_offset + i
+            fav_cats = random.sample(categories, k=min(random.randint(1, 3), len(categories)))
+            fav_pool = [iid for c in fav_cats for iid in [item["id"] for item in by_cat.get(c, [])]]
+
+            n_fav = int(interactions_per_user * 0.7)
+            n_rand = interactions_per_user - n_fav
+
+            selected: set[str] = set()
+            for item_id in random.sample(fav_pool, k=min(n_fav, len(fav_pool))):
+                selected.add(item_id)
+            for item_id in random.sample(all_ids, k=min(n_rand, len(all_ids))):
+                selected.add(item_id)
+
+            for item_id in selected:
+                f.write(json.dumps({"user_id": uid, "item_id": item_id, "label": 1}) + "\n")
+                written += 1
+
+    print(f"Saved {written} interactions ({len(personas)} personas + {anonymous_users} anon users) → {interactions_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--max_items", type=int, default=20_000,
                         help="Max garment crops to extract from Fashionpedia")
     parser.add_argument("--n_users", type=int, default=500)
     parser.add_argument("--interactions_per_user", type=int, default=30)
+    parser.add_argument(
+        "--personas", action="store_true",
+        help="Use persona-aware interaction generation (reads data/personas.json). "
+             "Recommended when demonstrating FAISS vs NeuMF vs SASRec differences.",
+    )
+    parser.add_argument("--interactions_per_persona", type=int, default=60)
     args = parser.parse_args()
 
     download_fashionpedia(max_items=args.max_items)
     assign_mock_prices()
-    build_synthetic_interactions(
-        n_users=args.n_users,
-        interactions_per_user=args.interactions_per_user,
-    )
+
+    if args.personas:
+        build_persona_interactions(
+            interactions_per_persona=args.interactions_per_persona,
+            anonymous_users=args.n_users,
+            interactions_per_user=args.interactions_per_user,
+        )
+    else:
+        build_synthetic_interactions(
+            n_users=args.n_users,
+            interactions_per_user=args.interactions_per_user,
+        )

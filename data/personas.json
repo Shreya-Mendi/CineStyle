@@ -1,0 +1,98 @@
+[
+  {
+    "id": 0,
+    "name": "Aria Chen",
+    "description": "Minimalist streetwear enthusiast. Curates a neutral-palette wardrobe — oversized blazers, wide-leg trousers, clean sneakers.",
+    "avatar_emoji": "🖤",
+    "favorite_categories": ["jacket", "pants", "shoe", "top, t-shirt, sweatshirt"],
+    "price_range": [40, 300],
+    "aesthetic": "minimalist",
+    "interaction_bias": {
+      "jacket": 0.35,
+      "pants": 0.30,
+      "shoe": 0.20,
+      "top, t-shirt, sweatshirt": 0.10,
+      "belt": 0.05
+    }
+  },
+  {
+    "id": 1,
+    "name": "Sofia Rossi",
+    "description": "Old-money aesthetic devotee. Thinks in cashmere, tweed, and quiet luxury — blazers, ballet flats, structured bags.",
+    "avatar_emoji": "🤍",
+    "favorite_categories": ["coat", "bag, wallet", "shoe", "sweater", "skirt"],
+    "price_range": [150, 850],
+    "aesthetic": "old money",
+    "interaction_bias": {
+      "coat": 0.30,
+      "bag, wallet": 0.25,
+      "shoe": 0.20,
+      "sweater": 0.15,
+      "skirt": 0.10
+    }
+  },
+  {
+    "id": 2,
+    "name": "Juno Park",
+    "description": "Y2K revival meets dark academia. Low-rise jeans, platform shoes, mesh tops layered over turtlenecks.",
+    "avatar_emoji": "💜",
+    "favorite_categories": ["top, t-shirt, sweatshirt", "skirt", "shoe", "dress", "glasses"],
+    "price_range": [20, 180],
+    "aesthetic": "y2k",
+    "interaction_bias": {
+      "top, t-shirt, sweatshirt": 0.30,
+      "skirt": 0.25,
+      "shoe": 0.20,
+      "dress": 0.15,
+      "glasses": 0.10
+    }
+  },
+  {
+    "id": 3,
+    "name": "Paloma Vega",
+    "description": "Cottagecore romantic. Floral midi dresses, linen blouses, wicker bags, and Mary Janes every season.",
+    "avatar_emoji": "🌸",
+    "favorite_categories": ["dress", "shirt, blouse", "bag, wallet", "shoe", "scarf"],
+    "price_range": [30, 250],
+    "aesthetic": "cottagecore",
+    "interaction_bias": {
+      "dress": 0.40,
+      "shirt, blouse": 0.25,
+      "bag, wallet": 0.15,
+      "shoe": 0.10,
+      "scarf": 0.10
+    }
+  },
+  {
+    "id": 4,
+    "name": "Marcus Webb",
+    "description": "Boardroom-to-bar dressing. Sharp tailoring with an edge — slim trousers, fitted blazers, quality watches, leather loafers.",
+    "avatar_emoji": "🕴️",
+    "favorite_categories": ["pants", "jacket", "watch", "shoe", "tie"],
+    "price_range": [80, 700],
+    "aesthetic": "formal",
+    "interaction_bias": {
+      "pants": 0.30,
+      "jacket": 0.30,
+      "watch": 0.20,
+      "shoe": 0.15,
+      "tie": 0.05
+    }
+  },
+  {
+    "id": 5,
+    "name": "Zara Okonkwo",
+    "description": "Maximalist accessory stacker. Every outfit built around statement bags, bold earrings, layered scarves, and chunky footwear.",
+    "avatar_emoji": "✨",
+    "favorite_categories": ["bag, wallet", "scarf", "hat", "shoe", "glasses"],
+    "price_range": [25, 500],
+    "aesthetic": "bohemian",
+    "interaction_bias": {
+      "bag, wallet": 0.35,
+      "scarf": 0.20,
+      "hat": 0.20,
+      "shoe": 0.15,
+      "glasses": 0.10
+    }
+  }
+]
