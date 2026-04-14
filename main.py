@@ -10,6 +10,7 @@ Endpoints:
 """
 
 import io
+import json
 import os
 from pathlib import Path
 
@@ -22,6 +23,16 @@ from pydantic import BaseModel
 
 from scripts.build_features import embed_image
 from scripts.model import recommend
+
+# ---------------------------------------------------------------------------
+# Personas — loaded once at startup, optional
+# ---------------------------------------------------------------------------
+_PERSONAS_PATH = Path("data/personas.json")
+_PERSONAS: list[dict] = []
+if _PERSONAS_PATH.exists():
+    with open(_PERSONAS_PATH) as _f:
+        _PERSONAS = json.load(_f)
+_PERSONA_BY_ID: dict[int, dict] = {p["id"]: p for p in _PERSONAS}
 
 # Restrict CORS to known origins. Override via ALLOWED_ORIGINS env var
 # (comma-separated list). Defaults to Vercel deployment + local dev.
@@ -59,6 +70,9 @@ class RecommendRequest(BaseModel):
     top_k: int = 12
     price_min: float | None = None
     price_max: float | None = None
+    # Optional — supply either user_id (int, maps to persona) or persona_id (same thing)
+    # If omitted, recommendations are purely embedding-based (no NCF/SASRec persona bias).
+    persona_id: int | None = None
 
 
 class ProductCard(BaseModel):
@@ -71,9 +85,30 @@ class ProductCard(BaseModel):
     similarity: float
 
 
+class PersonaCard(BaseModel):
+    id: int
+    name: str
+    description: str
+    avatar_emoji: str
+    favorite_categories: list[str]
+    price_range: list[float]
+    aesthetic: str
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/personas", response_model=list[PersonaCard])
+def list_personas():
+    """
+    Return all named demo personas.
+    Each persona has distinct category preferences that make FAISS vs NCF vs SASRec
+    rankings visibly different — useful for demo and evaluation slides.
+    Returns an empty list if data/personas.json is not present.
+    """
+    return _PERSONAS
 
 
 @app.post("/identify", response_model=GarmentResponse)
@@ -95,14 +130,37 @@ async def identify(file: UploadFile = File(...)):
 @app.post("/recommend", response_model=list[ProductCard])
 def get_recommendations(req: RecommendRequest):
     """
-    Given a garment embedding, run FAISS retrieval + NCF re-ranking.
-    Returns ranked product cards.
+    Given a garment embedding, run FAISS retrieval + optional NCF/SASRec re-ranking.
+
+    persona_id (optional): integer ID from /personas.
+      - Activates NCF user-preference re-ranking using that persona's interaction history.
+      - If persona_id is not provided, returns purely embedding-based KNN results.
+      - price_min/price_max from the persona are applied automatically unless overridden
+        in the request.
     """
     embedding = np.array(req.embedding, dtype=np.float32)
+
+    # Resolve persona overrides
+    price_min = req.price_min
+    price_max = req.price_max
+    user_id = 0
+
+    if req.persona_id is not None:
+        persona = _PERSONA_BY_ID.get(req.persona_id)
+        if persona is None:
+            raise HTTPException(status_code=404, detail=f"Persona {req.persona_id} not found.")
+        user_id = persona["id"]
+        # Apply persona price range only if caller didn't supply their own
+        if price_min is None and price_max is None:
+            lo, hi = persona.get("price_range", [None, None])
+            price_min = lo
+            price_max = hi
+
     products = recommend(
         embedding,
         top_k=req.top_k,
-        price_min=req.price_min,
-        price_max=req.price_max,
+        price_min=price_min,
+        price_max=price_max,
+        user_id=user_id,
     )
     return products
