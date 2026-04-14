@@ -90,7 +90,7 @@ def generate_tuning_chart():
     with open(OUT / "hyperparam_tuning.json") as f:
         data = json.load(f)
 
-    dims = [int(d) for d in data.keys()]
+    dims = sorted(int(d) for d in data.keys())
     dim_labels = [str(d) for d in dims]
     ndcgs = [data[str(d)]["ndcg@10"] for d in dims]
     losses = [data[str(d)]["final_loss"] for d in dims]
