@@ -1,5 +1,7 @@
 # CineStyle
 
+🔗 **Live app:** [cine-style-omega.vercel.app](https://cine-style-omega.vercel.app/)
+
 > *You're watching a show. Someone walks in wearing the perfect outfit. You want it. Now you can find it.*
 
 **AIPI 540 · Module Project · Duke University**
